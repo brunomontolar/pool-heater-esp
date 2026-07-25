@@ -1,0 +1,10 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: ">=5.2"
+  ## Pin to the current 2.0.x esp-zigbee-sdk release line (post-ZBOSS-removal
+  ## `ezb_*` API). See main/zb_main.c for notes on what changed vs. the older
+  ## esp_zb_* API most tutorials still reference.
+  espressif/esp-zigbee-lib:
+    version: ">=2.0.0,<3.0.0"

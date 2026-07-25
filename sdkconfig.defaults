@@ -1,0 +1,18 @@
+#
+# Partition Table
+#
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# end of Partition Table
+
+#
+# Zigbee
+#
+# This device is mains-powered (relay/pump), so it joins as a Router rather
+# than a sleepy End Device (CONFIG_ZB_ZED, what the stock SDK examples use).
+# ZB_ZCZR covers both Coordinator and Router roles; which one we act as is
+# determined at runtime by esp_zigbee's BDB commissioning (we call network
+# steering to join the existing SLZB-06-coordinated network, never formation).
+CONFIG_ZB_ENABLED=y
+CONFIG_ZB_ZCZR=y
+# end of Zigbee

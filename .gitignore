@@ -1,0 +1,24 @@
+# Build output
+build/
+
+# Generated full sdkconfig (machine/build-specific) - sdkconfig.defaults is
+# what's committed and used to regenerate this.
+sdkconfig
+sdkconfig.old
+
+# Component manager fetches these based on idf_component.yml + dependencies.lock
+managed_components/
+# dependencies.lock IS committed for reproducible builds (like a package lock)
+
+# Espressif IDF Installation Manager - local machine paths, not project config
+eim_config.toml
+
+# Editor/OS cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# gdbinit / core dumps from debugging sessions
+gdbinit
+coredump.bin
