@@ -7,11 +7,11 @@ existing Zigbee2MQTT network as a router.
 
 ## Status
 
-Project skeleton builds cleanly (`idf.py build`). Not yet wired up for real readings:
+Project skeleton builds cleanly (`idf.py build`).
 
-- [ ] `ads1115_read_channel()` in [`main/ads1115.c`](main/ads1115.c) - I2C conversion sequence
-- [ ] `thermistor_raw_to_celsius()` in [`main/thermistor.c`](main/thermistor.c) - Steinhart-Hart math,
-      needs the real B-coefficient/R25 from your thermistor's datasheet
+- [x] `ads1115_read_channel()` in [`main/ads1115.c`](main/ads1115.c) - I2C conversion sequence
+- [x] `thermistor_raw_to_celsius()` in [`main/thermistor.c`](main/thermistor.c) - Beta-equation math,
+      using a generic 10k NTC (B=3950) with a 10k fixed resistor to 3.3V (NTC to GND)
 - [ ] GPIO pins in [`main/app_config.h`](main/app_config.h) are placeholders - confirm against
       your actual wiring
 - [ ] Hysteresis thresholds / override timeout in `app_config.h` are placeholders - tune for

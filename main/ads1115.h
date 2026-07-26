@@ -1,10 +1,9 @@
 /*
- * ADS1115 4-channel 16-bit ADC driver - STUB.
+ * ADS1115 4-channel 16-bit ADC driver.
  *
- * Register map and config-register bitfields are filled in (fixed by the
- * ADS1115 datasheet); the actual I2C read/convert sequence and gain/PGA
- * selection are left as TODOs to fill in together, since they depend on the
- * voltage divider design for each thermistor channel.
+ * Register map and config-register bitfields are fixed by the ADS1115
+ * datasheet; single-ended reads use the PGA range selected in ads1115.c
+ * (ADS1115_PGA_RANGE), sized for a 3.3V-supplied divider.
  */
 #pragma once
 
@@ -42,11 +41,7 @@ typedef struct ads1115_dev_s *ads1115_handle_t;
 esp_err_t ads1115_init(i2c_master_bus_handle_t bus, ads1115_handle_t *out_handle);
 
 /* Reads a single-ended channel (0-3) and returns the raw signed 16-bit ADC
- * code. Convert to volts via (raw * PGA_full_scale_volts / 32768).
- *
- * TODO (together): write the conversion sequence - set the config register
- * for the desired channel/PGA/single-shot mode, wait for OS bit / conversion
- * time, then read ADS1115_REG_CONVERSION. */
+ * code. Convert to volts via (raw * PGA_full_scale_volts / 32768). */
 esp_err_t ads1115_read_channel(ads1115_handle_t handle, uint8_t channel, int16_t *raw_out);
 
 #ifdef __cplusplus
