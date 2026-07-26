@@ -1,7 +1,4 @@
-/*
- * Central place for pins, Zigbee endpoint IDs, and control-loop tuning.
- * Values marked TODO are placeholders - adjust for your actual wiring/board.
- */
+/* Central place for pins, Zigbee endpoint IDs, and control-loop tuning. */
 #pragma once
 
 #include <stdint.h>
@@ -15,15 +12,12 @@ extern "C" {
 /* I2C bus (ADS1115)                                                       */
 /* ---------------------------------------------------------------------- */
 
-/* TODO: confirm against your board's pinout. GPIO4-7 carry JTAG signals on
- * ESP32-C6 (only relevant if you use on-chip debugging), avoided here to be
- * safe by default. */
 #define APP_I2C_PORT       0
-#define APP_I2C_SDA_GPIO   GPIO_NUM_2  /* TODO */
-#define APP_I2C_SCL_GPIO   GPIO_NUM_3  /* TODO */
+#define APP_I2C_SDA_GPIO   GPIO_NUM_22 /* board silkscreen D4 */
+#define APP_I2C_SCL_GPIO   GPIO_NUM_23 /* board silkscreen D5 */
 #define APP_I2C_FREQ_HZ    400000
 
-#define APP_ADS1115_I2C_ADDR 0x48 /* ADDR pin tied to GND; TODO confirm wiring */
+#define APP_ADS1115_I2C_ADDR 0x48 /* ADDR pin tied to GND */
 #define APP_ADS1115_CH_THERM1 0  /* AIN0 */
 #define APP_ADS1115_CH_THERM2 1  /* AIN1 */
 
@@ -31,8 +25,8 @@ extern "C" {
 /* Relay / pump                                                           */
 /* ---------------------------------------------------------------------- */
 
-#define APP_RELAY_GPIO        GPIO_NUM_5 /* TODO */
-#define APP_RELAY_ACTIVE_HIGH 1          /* set to 0 if your relay board is active-low */
+#define APP_RELAY_GPIO        GPIO_NUM_21 /* board silkscreen D3 */
+#define APP_RELAY_ACTIVE_HIGH 1           /* set to 0 if your relay board is active-low */
 
 /* ---------------------------------------------------------------------- */
 /* Zigbee endpoints (HA profile)                                          */
@@ -62,8 +56,7 @@ extern "C" {
 #define APP_CONTROL_LOOP_INTERVAL_MS 5000
 
 /* Hysteresis thresholds on (temp1 - temp2), in centidegrees C.
- * TODO: tune for your system - THRESHOLD_ON must be > THRESHOLD_OFF or the
- * relay will chatter. */
+ * THRESHOLD_ON must be > THRESHOLD_OFF or the relay will chatter. */
 #define APP_DELTA_THRESHOLD_ON_CENTIDEGREES  500 /* 5.00C */
 #define APP_DELTA_THRESHOLD_OFF_CENTIDEGREES 200 /* 2.00C */
 

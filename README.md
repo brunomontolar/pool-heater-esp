@@ -12,10 +12,9 @@ Project skeleton builds cleanly (`idf.py build`).
 - [x] `ads1115_read_channel()` in [`main/ads1115.c`](main/ads1115.c) - I2C conversion sequence
 - [x] `thermistor_raw_to_celsius()` in [`main/thermistor.c`](main/thermistor.c) - Beta-equation math,
       using a generic 10k NTC (B=3950) with a 10k fixed resistor to 3.3V (NTC to GND)
-- [ ] GPIO pins in [`main/app_config.h`](main/app_config.h) are placeholders - confirm against
-      your actual wiring
-- [ ] Hysteresis thresholds / override timeout in `app_config.h` are placeholders - tune for
-      your system
+- [x] GPIO pins in [`main/app_config.h`](main/app_config.h) - confirmed against actual wiring
+- [x] Hysteresis thresholds / override timeout in `app_config.h` - kept as generic defaults
+      (5.00C on / 2.00C off / 30min override), retune once real readings are in
 
 ## Hardware
 
@@ -71,12 +70,12 @@ The first build fetches `espressif/esp-zigbee-lib` via the IDF Component Manager
 
 ```
 main/
-├── app_config.h      # pins, endpoint IDs, hysteresis/timing constants (TODO: tune)
+├── app_config.h      # pins, endpoint IDs, hysteresis/timing constants
 ├── main.c            # app_main: starts the Zigbee task and control loop task
 ├── zb_main.c/.h       # Zigbee stack, 3-endpoint device, commissioning, reporting
 ├── i2c_bus.c/.h        # I2C master bus init
-├── ads1115.c/.h        # ADS1115 driver (TODO: read sequence)
-├── thermistor.c/.h     # Steinhart-Hart conversion (TODO: math)
+├── ads1115.c/.h        # ADS1115 driver
+├── thermistor.c/.h     # Beta-equation conversion
 ├── relay.c/.h          # GPIO relay driver
 └── pump_control.c/.h   # Control loop: read -> report -> hysteresis -> drive relay
 ```
