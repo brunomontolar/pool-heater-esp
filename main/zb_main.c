@@ -11,9 +11,11 @@
  */
 #include <stdlib.h>
 
+#include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -84,6 +86,12 @@ static volatile bool s_applying_local_pump_state = false;
 
 static volatile bool    s_manual_override_active = false;
 static volatile int64_t s_manual_override_deadline_us = 0;
+
+/* Set right before we ask the stack to factory-reset itself, so the
+ * EZB_ZDO_SIGNAL_LEAVE handler below knows this particular leave is ours and
+ * should be followed by a reboot, rather than e.g. the coordinator kicking us
+ * off the network for an unrelated reason. */
+static volatile bool s_factory_reset_requested = false;
 
 /* ---------------------------------------------------------------------- */
 /* One-shot retry timer (mirrors the SDK examples' `alarm_timer` utility,   */
@@ -248,6 +256,10 @@ static bool zb_app_signal_handler(const ezb_app_signal_t *app_signal)
     case EZB_ZDO_SIGNAL_LEAVE: {
         const ezb_zdo_signal_leave_params_t *leave_params = ezb_app_signal_get_params(app_signal);
         ESP_LOGI(TAG, "Left network with type(0x%02x)", leave_params->leave_type);
+        if (s_factory_reset_requested) {
+            ESP_LOGW(TAG, "Factory reset complete, restarting to rejoin as factory-new");
+            esp_restart();
+        }
     } break;
     case EZB_NWK_SIGNAL_PERMIT_JOIN_STATUS: {
         uint8_t duration = *(uint8_t *)ezb_app_signal_get_params(app_signal);
@@ -331,12 +343,66 @@ static void zb_main_task(void *pvParameters)
 }
 
 /* ---------------------------------------------------------------------- */
+/* Boot-button factory reset                                              */
+/* ---------------------------------------------------------------------- */
+
+/* ASSUMPTION TO VERIFY: ezb_factory_reset() is this SDK line's analogue of
+ * the classic esp_zb_factory_reset() (leave the network and erase Zigbee
+ * NVRAM, then emit EZB_ZDO_SIGNAL_LEAVE with a reset leave type) - confirm
+ * the name against the actual ezbee headers once they're available; adjust
+ * if the SDK instead expects e.g. ezb_bdb_reset_via_local_action(). */
+static void zb_boot_button_task(void *pvParameters)
+{
+    const TickType_t poll_interval = pdMS_TO_TICKS(50);
+    int64_t press_start_us = 0;
+    bool reset_armed = true; /* disarmed after firing once, until the button is released */
+
+    for (;;) {
+        bool pressed = (gpio_get_level(APP_BOOT_BUTTON_GPIO) == 0);
+
+        if (!pressed) {
+            press_start_us = 0;
+            reset_armed = true;
+        } else {
+            if (press_start_us == 0) {
+                press_start_us = esp_timer_get_time();
+            } else if (reset_armed &&
+                       (esp_timer_get_time() - press_start_us) >= (int64_t)APP_FACTORY_RESET_HOLD_MS * 1000) {
+                reset_armed = false;
+                ESP_LOGW(TAG, "BOOT button held %dms - factory resetting Zigbee stack", APP_FACTORY_RESET_HOLD_MS);
+                s_factory_reset_requested = true;
+                esp_zigbee_lock_acquire(portMAX_DELAY);
+                ezb_factory_reset();
+                esp_zigbee_lock_release();
+            }
+        }
+
+        vTaskDelay(poll_interval);
+    }
+}
+
+static esp_err_t zb_boot_button_init(void)
+{
+    const gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << APP_BOOT_BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&cfg), TAG, "Failed to configure boot button GPIO");
+    xTaskCreate(zb_boot_button_task, "zb_boot_btn", 2048, NULL, 3, NULL);
+    return ESP_OK;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Public API                                                              */
 /* ---------------------------------------------------------------------- */
 
 void zb_main_start(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init_partition(APP_ZB_STORAGE_PARTITION_NAME));
+    ESP_ERROR_CHECK(zb_boot_button_init());
     xTaskCreate(zb_main_task, "Zigbee_main", 4096, NULL, 5, NULL);
 }
 

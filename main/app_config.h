@@ -29,6 +29,17 @@ extern "C" {
 #define APP_RELAY_ACTIVE_HIGH 1           /* set to 0 if your relay board is active-low */
 
 /* ---------------------------------------------------------------------- */
+/* Boot button (Zigbee factory reset)                                     */
+/* ---------------------------------------------------------------------- */
+
+/* Stock BOOT button on ESP32-C6-DevKitC-1 - active-low, external button ties
+ * it to GND, internal pull-up holds it high when released. Also a strapping
+ * pin at power-on/reset, but that only matters before/during boot; safe to
+ * reconfigure as a plain input once the app is running. */
+#define APP_BOOT_BUTTON_GPIO      GPIO_NUM_9
+#define APP_FACTORY_RESET_HOLD_MS (5000) /* hold BOOT this long to leave the network and re-pair */
+
+/* ---------------------------------------------------------------------- */
 /* Zigbee endpoints (HA profile)                                          */
 /* ---------------------------------------------------------------------- */
 

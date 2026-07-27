@@ -85,3 +85,14 @@ main/
 The device joins via Zigbee network steering automatically on first boot (factory-new state).
 Put your Zigbee2MQTT coordinator into pairing mode (`permit_join`) before powering on the
 board for the first time, or after a factory reset.
+
+## Resetting / re-pairing
+
+Hold the board's **BOOT** button (GPIO9 on ESP32-C6-DevKitC-1, see `APP_BOOT_BUTTON_GPIO` in
+[`main/app_config.h`](main/app_config.h)) for `APP_FACTORY_RESET_HOLD_MS` (5 seconds by default).
+The device leaves the current Zigbee network, erases its stored network credentials, and reboots
+into factory-new state, immediately starting network steering again - put the coordinator into
+pairing mode (`permit_join`) before or during the hold so it rejoins right away.
+
+Network credentials persist across normal reboots (they live in the `zb_storage` NVS partition),
+so a power cycle alone does not require re-pairing.
