@@ -52,10 +52,28 @@ static void pump_control_task(void *arg)
         int32_t delta_centidegrees = (int32_t)t1_centidegrees - (int32_t)t2_centidegrees;
 
         bool override_active = zb_main_is_manual_override_active();
+        bool auto_enabled = zb_main_is_auto_control_enabled();
         if (!override_active) {
-            if (delta_centidegrees > APP_DELTA_THRESHOLD_ON_CENTIDEGREES) {
-                s_pump_commanded_on = true;
-            } else if (delta_centidegrees < APP_DELTA_THRESHOLD_OFF_CENTIDEGREES) {
+            if (auto_enabled) {
+                /* t2 (APP_EP_THERMISTOR_2) is treated as the pool-water
+                 * sensor and t1 (collector) as the heat source, matching the
+                 * existing delta convention below (ON when the collector is
+                 * hotter than the pool). If your wiring has THERM1/THERM2
+                 * swapped, swap which one is compared against the setpoint
+                 * here too. Reaching the setpoint behaves like the OFF
+                 * threshold: it stops the pump immediately and blocks new ON
+                 * commands, rather than just blocking the ON transition -
+                 * otherwise the pump could keep running past the setpoint
+                 * for a while inside the hysteresis dead zone. */
+                int16_t setpoint_centidegrees = zb_main_get_pool_setpoint_centidegrees();
+                bool setpoint_reached = t2_centidegrees >= setpoint_centidegrees;
+
+                if (!setpoint_reached && delta_centidegrees > APP_DELTA_THRESHOLD_ON_CENTIDEGREES) {
+                    s_pump_commanded_on = true;
+                } else if (setpoint_reached || delta_centidegrees < APP_DELTA_THRESHOLD_OFF_CENTIDEGREES) {
+                    s_pump_commanded_on = false;
+                }
+            } else {
                 s_pump_commanded_on = false;
             }
             /* Always (re-)apply, even when unchanged: this self-heals the
@@ -66,8 +84,9 @@ static void pump_control_task(void *arg)
             zb_main_set_pump_state(s_pump_commanded_on);
         }
 
-        ESP_LOGI(TAG, "T1=%.2fC T2=%.2fC delta=%.2fC pump=%s%s", t1_c, t2_c, (double)(t1_c - t2_c),
-                 s_pump_commanded_on ? "ON" : "OFF", override_active ? " (manual override active)" : "");
+        ESP_LOGI(TAG, "T1=%.2fC T2=%.2fC delta=%.2fC pump=%s%s%s", t1_c, t2_c, (double)(t1_c - t2_c),
+                 s_pump_commanded_on ? "ON" : "OFF", override_active ? " (manual override active)" : "",
+                 (!override_active && !auto_enabled) ? " (auto control disabled)" : "");
 
         vTaskDelay(pdMS_TO_TICKS(APP_CONTROL_LOOP_INTERVAL_MS));
     }

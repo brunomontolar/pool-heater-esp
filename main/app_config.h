@@ -29,12 +29,25 @@ extern "C" {
 #define APP_RELAY_ACTIVE_HIGH 1           /* set to 0 if your relay board is active-low */
 
 /* ---------------------------------------------------------------------- */
+/* Boot button (Zigbee factory reset)                                     */
+/* ---------------------------------------------------------------------- */
+
+/* Stock BOOT button on ESP32-C6-DevKitC-1 - active-low, external button ties
+ * it to GND, internal pull-up holds it high when released. Also a strapping
+ * pin at power-on/reset, but that only matters before/during boot; safe to
+ * reconfigure as a plain input once the app is running. */
+#define APP_BOOT_BUTTON_GPIO      GPIO_NUM_9
+#define APP_FACTORY_RESET_HOLD_MS (5000) /* hold BOOT this long to leave the network and re-pair */
+
+/* ---------------------------------------------------------------------- */
 /* Zigbee endpoints (HA profile)                                          */
 /* ---------------------------------------------------------------------- */
 
-#define APP_EP_THERMISTOR_1 10 /* Temperature Measurement cluster (0x0402) */
-#define APP_EP_THERMISTOR_2 11 /* Temperature Measurement cluster (0x0402) */
-#define APP_EP_PUMP_RELAY   12 /* On/Off cluster (0x0006)                 */
+#define APP_EP_THERMISTOR_1  10 /* Temperature Measurement cluster (0x0402) */
+#define APP_EP_THERMISTOR_2  11 /* Temperature Measurement cluster (0x0402) */
+#define APP_EP_PUMP_RELAY    12 /* On/Off cluster (0x0006)                  */
+#define APP_EP_AUTO_ENABLE   13 /* On/Off cluster (0x0006) - gates hysteresis control */
+#define APP_EP_POOL_SETPOINT 14 /* Thermostat cluster (0x0201) - OccupiedHeatingSetpoint */
 
 /* ZCL string attributes are length-prefixed: first byte = length, then the
  * bytes themselves (no NUL terminator). Keep the \xNN prefix in sync with the
@@ -63,6 +76,23 @@ extern "C" {
 /* How long a manual on/off write from Home Assistant/Z2M suppresses automatic
  * control before the hysteresis loop resumes driving the relay itself. */
 #define APP_MANUAL_OVERRIDE_TIMEOUT_MS (30 * 60 * 1000) /* 30 minutes */
+
+/* Default pool heating setpoint (APP_EP_POOL_SETPOINT's OccupiedHeatingSetpoint),
+ * in centidegrees C. Once the pool thermistor reads at or above this, the
+ * hysteresis loop won't (re)start the pump even if the collector is hot
+ * enough - see the comment above the setpoint check in pump_control.c for
+ * which thermistor is treated as "the pool". Used only until a persisted
+ * value is loaded from NVS at boot (see APP_NVS_NAMESPACE below), and again
+ * if none has ever been persisted (fresh device / erased NVS). */
+#define APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES 3000 /* 30.00C */
+
+/* Namespace/keys for persisting the auto-enable switch (ep 13) and pool
+ * setpoint (ep 14) across reboots in the default "nvs" partition - separate
+ * from APP_ZB_STORAGE_PARTITION_NAME, which only holds Zigbee network state
+ * and is wiped by the BOOT-button factory reset. These survive that reset. */
+#define APP_NVS_NAMESPACE       "pool_ctrl"
+#define APP_NVS_KEY_AUTO_ENABLE "auto_en"
+#define APP_NVS_KEY_SETPOINT    "setpoint"
 
 /* Zigbee attribute reporting (Temperature Measurement, endpoints 10 & 11). */
 #define APP_REPORT_MIN_INTERVAL_S 5    /* do not report more often than this */

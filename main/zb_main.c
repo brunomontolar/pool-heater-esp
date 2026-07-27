@@ -11,10 +11,13 @@
  */
 #include <stdlib.h>
 
+#include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -84,6 +87,74 @@ static volatile bool s_applying_local_pump_state = false;
 
 static volatile bool    s_manual_override_active = false;
 static volatile int64_t s_manual_override_deadline_us = 0;
+
+/* Mirrors of the two control-gate endpoints below, read by pump_control.c's
+ * hysteresis loop every cycle. Initialized to these compiled-in defaults,
+ * then overwritten by zb_load_persisted_state() at boot if a previously
+ * persisted value exists in NVS (see the persistence section below). */
+static volatile bool    s_auto_control_enabled = true;
+static volatile int16_t s_pool_setpoint_centidegrees = APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES;
+
+/* Set right before we ask the stack to factory-reset itself, so the
+ * EZB_ZDO_SIGNAL_LEAVE handler below knows this particular leave is ours and
+ * should be followed by a reboot, rather than e.g. the coordinator kicking us
+ * off the network for an unrelated reason. */
+static volatile bool s_factory_reset_requested = false;
+
+/* ---------------------------------------------------------------------- */
+/* NVS persistence for s_auto_control_enabled / s_pool_setpoint_centidegrees */
+/* ---------------------------------------------------------------------- */
+
+/* Loads any previously-persisted values over the compiled-in defaults above.
+ * Must run before zb_create_device() applies s_auto_control_enabled /
+ * s_pool_setpoint_centidegrees to the ZCL attributes' startup values. Missing
+ * namespace/keys (fresh device, or NVS erased independently of zb_storage)
+ * just leave the defaults in place. */
+static void zb_load_persisted_state(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(APP_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+        return;
+    }
+
+    uint8_t auto_enable;
+    if (nvs_get_u8(handle, APP_NVS_KEY_AUTO_ENABLE, &auto_enable) == ESP_OK) {
+        s_auto_control_enabled = auto_enable;
+    }
+
+    int16_t setpoint;
+    if (nvs_get_i16(handle, APP_NVS_KEY_SETPOINT, &setpoint) == ESP_OK) {
+        s_pool_setpoint_centidegrees = setpoint;
+    }
+
+    nvs_close(handle);
+    ESP_LOGI(TAG, "Loaded persisted state: auto_control=%s setpoint=%dcC",
+             s_auto_control_enabled ? "on" : "off", s_pool_setpoint_centidegrees);
+}
+
+static void zb_persist_auto_enable(bool enabled)
+{
+    nvs_handle_t handle;
+    if (nvs_open(APP_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS to persist auto-enable state");
+        return;
+    }
+    nvs_set_u8(handle, APP_NVS_KEY_AUTO_ENABLE, enabled ? 1 : 0);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
+
+static void zb_persist_setpoint(int16_t centidegrees)
+{
+    nvs_handle_t handle;
+    if (nvs_open(APP_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS to persist pool setpoint");
+        return;
+    }
+    nvs_set_i16(handle, APP_NVS_KEY_SETPOINT, centidegrees);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
 
 /* ---------------------------------------------------------------------- */
 /* One-shot retry timer (mirrors the SDK examples' `alarm_timer` utility,   */
@@ -185,12 +256,49 @@ static void zb_on_off_attr_change_handler(ezb_zcl_set_attr_value_message_t *mess
     relay_set(on);
 }
 
+/* ---------------------------------------------------------------------- */
+/* Auto-control enable switch (ep 13, On/Off cluster)                     */
+/* ---------------------------------------------------------------------- */
+
+static void zb_auto_enable_attr_change_handler(ezb_zcl_set_attr_value_message_t *message)
+{
+    if (message == NULL || message->info.dst_ep != APP_EP_AUTO_ENABLE ||
+        message->info.cluster_id != EZB_ZCL_CLUSTER_ID_ON_OFF ||
+        message->in.attribute.id != EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
+        return;
+    }
+
+    s_auto_control_enabled = *(uint8_t *)message->in.attribute.data.value;
+    zb_persist_auto_enable(s_auto_control_enabled);
+    ESP_LOGI(TAG, "Automatic pump control %s from network", s_auto_control_enabled ? "ENABLED" : "DISABLED");
+}
+
+/* ---------------------------------------------------------------------- */
+/* Pool heating setpoint (ep 14, Thermostat cluster)                      */
+/* ---------------------------------------------------------------------- */
+
+static void zb_setpoint_attr_change_handler(ezb_zcl_set_attr_value_message_t *message)
+{
+    if (message == NULL || message->info.dst_ep != APP_EP_POOL_SETPOINT ||
+        message->info.cluster_id != EZB_ZCL_CLUSTER_ID_THERMOSTAT ||
+        message->in.attribute.id != EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID) {
+        return;
+    }
+
+    s_pool_setpoint_centidegrees = *(int16_t *)message->in.attribute.data.value;
+    zb_persist_setpoint(s_pool_setpoint_centidegrees);
+    ESP_LOGI(TAG, "Pool heating setpoint changed to %d centidegrees C from network", s_pool_setpoint_centidegrees);
+}
+
 static void zb_zcl_core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
 {
     switch (callback_id) {
-    case EZB_ZCL_CORE_SET_ATTR_VALUE_CB_ID:
-        zb_on_off_attr_change_handler((ezb_zcl_set_attr_value_message_t *)message);
-        break;
+    case EZB_ZCL_CORE_SET_ATTR_VALUE_CB_ID: {
+        ezb_zcl_set_attr_value_message_t *msg = (ezb_zcl_set_attr_value_message_t *)message;
+        zb_on_off_attr_change_handler(msg);
+        zb_auto_enable_attr_change_handler(msg);
+        zb_setpoint_attr_change_handler(msg);
+    } break;
     case EZB_ZCL_CORE_DEFAULT_RSP_CB_ID: {
         ezb_zcl_cmd_default_rsp_message_t *rsp = (ezb_zcl_cmd_default_rsp_message_t *)message;
         ESP_LOGD(TAG, "Received ZCL Default Response: status(0x%02x)", rsp->in.status_code);
@@ -248,6 +356,10 @@ static bool zb_app_signal_handler(const ezb_app_signal_t *app_signal)
     case EZB_ZDO_SIGNAL_LEAVE: {
         const ezb_zdo_signal_leave_params_t *leave_params = ezb_app_signal_get_params(app_signal);
         ESP_LOGI(TAG, "Left network with type(0x%02x)", leave_params->leave_type);
+        if (s_factory_reset_requested) {
+            ESP_LOGW(TAG, "Factory reset complete, restarting to rejoin as factory-new");
+            esp_restart();
+        }
     } break;
     case EZB_NWK_SIGNAL_PERMIT_JOIN_STATUS: {
         uint8_t duration = *(uint8_t *)ezb_app_signal_get_params(app_signal);
@@ -299,7 +411,42 @@ static esp_err_t zb_create_device(void)
     zb_set_basic_cluster_strings(pump_ep);
     ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(dev_desc, pump_ep), TAG, "Failed to add pump relay endpoint");
 
+    /* Plain On/Off cluster used as a kill switch for the hysteresis loop
+     * itself (pump_control.c), not to drive any hardware directly - modeled
+     * as an on/off light purely because that's the simplest HA device type
+     * exposing a writable/readable On/Off server cluster. Default state (on
+     * = automatic control enabled) is forced below since ezb_zha_create_*
+     * config macros don't expose a documented "startup on/off" field. */
+    ezb_zha_on_off_light_config_t auto_enable_cfg = EZB_ZHA_ON_OFF_LIGHT_CONFIG();
+    ezb_af_ep_desc_t auto_enable_ep = ezb_zha_create_on_off_light(APP_EP_AUTO_ENABLE, &auto_enable_cfg);
+    zb_set_basic_cluster_strings(auto_enable_ep);
+    ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(dev_desc, auto_enable_ep), TAG, "Failed to add auto-enable endpoint");
+
+    /* Thermostat cluster used only for its OccupiedHeatingSetpoint attribute,
+     * so Home Assistant/Z2M gets a normal editable temperature setpoint
+     * entity instead of a bespoke custom-cluster number. Everything else
+     * about the cluster (LocalTemperature, SystemMode, etc.) is left at the
+     * config macro's defaults - unused by this device.
+     *
+     * ASSUMPTION TO VERIFY: ezb_zha_thermostat_config_t / EZB_ZHA_THERMOSTAT_CONFIG()
+     * / ezb_zha_create_thermostat(), and the EZB_ZCL_CLUSTER_ID_THERMOSTAT /
+     * EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID constants below, are
+     * extrapolated from this file's existing ezb_zha_temperature_sensor_ /
+     * ezb_zha_mains_power_outlet_ naming pattern, plus the real (esp_zb_*)
+     * SDK's documented esp_zb_thermostat_cfg_t.thermostat_cfg.occupied_heating_setpoint
+     * field - not confirmed against the vendored ezbee headers. Fix the names
+     * up against the real headers on first build if they don't match. */
+    ezb_zha_thermostat_config_t setpoint_cfg = EZB_ZHA_THERMOSTAT_CONFIG();
+    setpoint_cfg.thermostat_cfg.occupied_heating_setpoint = s_pool_setpoint_centidegrees;
+    ezb_af_ep_desc_t setpoint_ep = ezb_zha_create_thermostat(APP_EP_POOL_SETPOINT, &setpoint_cfg);
+    zb_set_basic_cluster_strings(setpoint_ep);
+    ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(dev_desc, setpoint_ep), TAG, "Failed to add pool setpoint endpoint");
+
     ESP_RETURN_ON_ERROR(ezb_af_device_desc_register(dev_desc), TAG, "Failed to register device descriptor");
+
+    uint8_t auto_enable_startup_value = s_auto_control_enabled ? 1 : 0;
+    ezb_zcl_set_attr_value(APP_EP_AUTO_ENABLE, EZB_ZCL_CLUSTER_ID_ON_OFF, EZB_ZCL_CLUSTER_SERVER,
+                           EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, EZB_ZCL_STD_MANUF_CODE, &auto_enable_startup_value, false);
 
     ezb_zcl_core_action_handler_register(zb_zcl_core_action_handler);
 
@@ -331,12 +478,71 @@ static void zb_main_task(void *pvParameters)
 }
 
 /* ---------------------------------------------------------------------- */
+/* Boot-button factory reset                                              */
+/* ---------------------------------------------------------------------- */
+
+/* ASSUMPTION TO VERIFY: ezb_factory_reset() is this SDK line's analogue of
+ * the classic esp_zb_factory_reset() (leave the network and erase Zigbee
+ * NVRAM, then emit EZB_ZDO_SIGNAL_LEAVE with a reset leave type) - confirm
+ * the name against the actual ezbee headers once they're available; adjust
+ * if the SDK instead expects e.g. ezb_bdb_reset_via_local_action(). */
+static void zb_boot_button_task(void *pvParameters)
+{
+    const TickType_t poll_interval = pdMS_TO_TICKS(50);
+    int64_t press_start_us = 0;
+    bool reset_armed = true; /* disarmed after firing once, until the button is released */
+
+    for (;;) {
+        bool pressed = (gpio_get_level(APP_BOOT_BUTTON_GPIO) == 0);
+
+        if (!pressed) {
+            press_start_us = 0;
+            reset_armed = true;
+        } else {
+            if (press_start_us == 0) {
+                press_start_us = esp_timer_get_time();
+            } else if (reset_armed &&
+                       (esp_timer_get_time() - press_start_us) >= (int64_t)APP_FACTORY_RESET_HOLD_MS * 1000) {
+                reset_armed = false;
+                ESP_LOGW(TAG, "BOOT button held %dms - factory resetting Zigbee stack", APP_FACTORY_RESET_HOLD_MS);
+                s_factory_reset_requested = true;
+                esp_zigbee_lock_acquire(portMAX_DELAY);
+                ezb_factory_reset();
+                esp_zigbee_lock_release();
+            }
+        }
+
+        vTaskDelay(poll_interval);
+    }
+}
+
+static esp_err_t zb_boot_button_init(void)
+{
+    const gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << APP_BOOT_BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&cfg), TAG, "Failed to configure boot button GPIO");
+    xTaskCreate(zb_boot_button_task, "zb_boot_btn", 2048, NULL, 3, NULL);
+    return ESP_OK;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Public API                                                              */
 /* ---------------------------------------------------------------------- */
 
 void zb_main_start(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init_partition(APP_ZB_STORAGE_PARTITION_NAME));
+    /* Default "nvs" partition: already initialized by nvs_flash_init() in
+     * app_main() before this is called. Must run before zb_main_task spins
+     * up and calls zb_create_device(), which applies these as the ZCL
+     * attributes' startup values. */
+    zb_load_persisted_state();
+    ESP_ERROR_CHECK(zb_boot_button_init());
     xTaskCreate(zb_main_task, "Zigbee_main", 4096, NULL, 5, NULL);
 }
 
@@ -368,4 +574,14 @@ bool zb_main_is_manual_override_active(void)
         ESP_LOGI(TAG, "Manual override window elapsed; resuming automatic pump control");
     }
     return s_manual_override_active;
+}
+
+bool zb_main_is_auto_control_enabled(void)
+{
+    return s_auto_control_enabled;
+}
+
+int16_t zb_main_get_pool_setpoint_centidegrees(void)
+{
+    return s_pool_setpoint_centidegrees;
 }
