@@ -53,8 +53,14 @@ affect manual writes to endpoint 12, which always take priority.
 Endpoint 14's `OccupiedHeatingSetpoint` attribute is the maximum pool water temperature
 (thermistor 2), in centidegrees C, above which the hysteresis loop won't turn the pump on to
 heat the pool further - reaching it also stops the pump immediately if it was already running.
-Defaults to `APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES` (30.00C) on every boot; both this and the
-endpoint 13 enable switch live in RAM only and are not persisted across reboots.
+Defaults to `APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES` (30.00C).
+
+Both the endpoint 13 enable switch and the endpoint 14 setpoint are persisted to the default
+`nvs` partition (namespace `APP_NVS_NAMESPACE`, see `app_config.h`) whenever changed from Home
+Assistant/Z2M, and reloaded on every boot - the compiled-in defaults above only apply on a
+device that has never had either attribute written. This is a separate partition from
+`zb_storage` (Zigbee network state), so these settings survive the BOOT-button factory reset
+described below.
 
 ## SDK version note
 

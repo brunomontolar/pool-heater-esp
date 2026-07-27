@@ -34,17 +34,20 @@ void zb_main_set_pump_state(bool on);
 bool zb_main_is_manual_override_active(void);
 
 /* True if the automatic hysteresis loop is allowed to drive the pump relay
- * (APP_EP_AUTO_ENABLE's On/Off attribute). Defaults to true on every boot;
- * toggled false from Home Assistant/Z2M pauses automatic control entirely -
- * the hysteresis loop should force the relay off and skip its decision logic
- * while this returns false. Does not affect manual on/off writes to the pump
- * relay itself (APP_EP_PUMP_RELAY / zb_main_is_manual_override_active()). */
+ * (APP_EP_AUTO_ENABLE's On/Off attribute). Defaults to true unless a
+ * persisted value is found in NVS (APP_NVS_NAMESPACE); toggled false from
+ * Home Assistant/Z2M pauses automatic control entirely and persists across
+ * reboots - the hysteresis loop should force the relay off and skip its
+ * decision logic while this returns false. Does not affect manual on/off
+ * writes to the pump relay itself (APP_EP_PUMP_RELAY /
+ * zb_main_is_manual_override_active()). */
 bool zb_main_is_auto_control_enabled(void);
 
 /* Current pool heating setpoint (centidegrees C, APP_EP_POOL_SETPOINT's
  * OccupiedHeatingSetpoint attribute). Defaults to
- * APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES on every boot; changeable at runtime
- * from Home Assistant/Z2M. RAM only - not persisted across reboots. */
+ * APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES unless a persisted value is found in
+ * NVS (APP_NVS_NAMESPACE); changes from Home Assistant/Z2M persist across
+ * reboots. */
 int16_t zb_main_get_pool_setpoint_centidegrees(void);
 
 #ifdef __cplusplus

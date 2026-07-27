@@ -81,9 +81,18 @@ extern "C" {
  * in centidegrees C. Once the pool thermistor reads at or above this, the
  * hysteresis loop won't (re)start the pump even if the collector is hot
  * enough - see the comment above the setpoint check in pump_control.c for
- * which thermistor is treated as "the pool". Live in RAM only: resets to
- * this default on every boot, changeable at runtime via Zigbee. */
+ * which thermistor is treated as "the pool". Used only until a persisted
+ * value is loaded from NVS at boot (see APP_NVS_NAMESPACE below), and again
+ * if none has ever been persisted (fresh device / erased NVS). */
 #define APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES 3000 /* 30.00C */
+
+/* Namespace/keys for persisting the auto-enable switch (ep 13) and pool
+ * setpoint (ep 14) across reboots in the default "nvs" partition - separate
+ * from APP_ZB_STORAGE_PARTITION_NAME, which only holds Zigbee network state
+ * and is wiped by the BOOT-button factory reset. These survive that reset. */
+#define APP_NVS_NAMESPACE       "pool_ctrl"
+#define APP_NVS_KEY_AUTO_ENABLE "auto_en"
+#define APP_NVS_KEY_SETPOINT    "setpoint"
 
 /* Zigbee attribute reporting (Temperature Measurement, endpoints 10 & 11). */
 #define APP_REPORT_MIN_INTERVAL_S 5    /* do not report more often than this */
