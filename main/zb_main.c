@@ -87,6 +87,12 @@ static volatile bool s_applying_local_pump_state = false;
 static volatile bool    s_manual_override_active = false;
 static volatile int64_t s_manual_override_deadline_us = 0;
 
+/* Mirrors of the two new control-gate endpoints below, read by
+ * pump_control.c's hysteresis loop every cycle. Both live in RAM only and
+ * reset to their defaults on every boot (see zb_create_device()). */
+static volatile bool    s_auto_control_enabled = true;
+static volatile int16_t s_pool_setpoint_centidegrees = APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES;
+
 /* Set right before we ask the stack to factory-reset itself, so the
  * EZB_ZDO_SIGNAL_LEAVE handler below knows this particular leave is ours and
  * should be followed by a reboot, rather than e.g. the coordinator kicking us
@@ -193,12 +199,47 @@ static void zb_on_off_attr_change_handler(ezb_zcl_set_attr_value_message_t *mess
     relay_set(on);
 }
 
+/* ---------------------------------------------------------------------- */
+/* Auto-control enable switch (ep 13, On/Off cluster)                     */
+/* ---------------------------------------------------------------------- */
+
+static void zb_auto_enable_attr_change_handler(ezb_zcl_set_attr_value_message_t *message)
+{
+    if (message == NULL || message->info.dst_ep != APP_EP_AUTO_ENABLE ||
+        message->info.cluster_id != EZB_ZCL_CLUSTER_ID_ON_OFF ||
+        message->in.attribute.id != EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
+        return;
+    }
+
+    s_auto_control_enabled = *(uint8_t *)message->in.attribute.data.value;
+    ESP_LOGI(TAG, "Automatic pump control %s from network", s_auto_control_enabled ? "ENABLED" : "DISABLED");
+}
+
+/* ---------------------------------------------------------------------- */
+/* Pool heating setpoint (ep 14, Thermostat cluster)                      */
+/* ---------------------------------------------------------------------- */
+
+static void zb_setpoint_attr_change_handler(ezb_zcl_set_attr_value_message_t *message)
+{
+    if (message == NULL || message->info.dst_ep != APP_EP_POOL_SETPOINT ||
+        message->info.cluster_id != EZB_ZCL_CLUSTER_ID_THERMOSTAT ||
+        message->in.attribute.id != EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID) {
+        return;
+    }
+
+    s_pool_setpoint_centidegrees = *(int16_t *)message->in.attribute.data.value;
+    ESP_LOGI(TAG, "Pool heating setpoint changed to %d centidegrees C from network", s_pool_setpoint_centidegrees);
+}
+
 static void zb_zcl_core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
 {
     switch (callback_id) {
-    case EZB_ZCL_CORE_SET_ATTR_VALUE_CB_ID:
-        zb_on_off_attr_change_handler((ezb_zcl_set_attr_value_message_t *)message);
-        break;
+    case EZB_ZCL_CORE_SET_ATTR_VALUE_CB_ID: {
+        ezb_zcl_set_attr_value_message_t *msg = (ezb_zcl_set_attr_value_message_t *)message;
+        zb_on_off_attr_change_handler(msg);
+        zb_auto_enable_attr_change_handler(msg);
+        zb_setpoint_attr_change_handler(msg);
+    } break;
     case EZB_ZCL_CORE_DEFAULT_RSP_CB_ID: {
         ezb_zcl_cmd_default_rsp_message_t *rsp = (ezb_zcl_cmd_default_rsp_message_t *)message;
         ESP_LOGD(TAG, "Received ZCL Default Response: status(0x%02x)", rsp->in.status_code);
@@ -311,7 +352,42 @@ static esp_err_t zb_create_device(void)
     zb_set_basic_cluster_strings(pump_ep);
     ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(dev_desc, pump_ep), TAG, "Failed to add pump relay endpoint");
 
+    /* Plain On/Off cluster used as a kill switch for the hysteresis loop
+     * itself (pump_control.c), not to drive any hardware directly - modeled
+     * as an on/off light purely because that's the simplest HA device type
+     * exposing a writable/readable On/Off server cluster. Default state (on
+     * = automatic control enabled) is forced below since ezb_zha_create_*
+     * config macros don't expose a documented "startup on/off" field. */
+    ezb_zha_on_off_light_config_t auto_enable_cfg = EZB_ZHA_ON_OFF_LIGHT_CONFIG();
+    ezb_af_ep_desc_t auto_enable_ep = ezb_zha_create_on_off_light(APP_EP_AUTO_ENABLE, &auto_enable_cfg);
+    zb_set_basic_cluster_strings(auto_enable_ep);
+    ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(dev_desc, auto_enable_ep), TAG, "Failed to add auto-enable endpoint");
+
+    /* Thermostat cluster used only for its OccupiedHeatingSetpoint attribute,
+     * so Home Assistant/Z2M gets a normal editable temperature setpoint
+     * entity instead of a bespoke custom-cluster number. Everything else
+     * about the cluster (LocalTemperature, SystemMode, etc.) is left at the
+     * config macro's defaults - unused by this device.
+     *
+     * ASSUMPTION TO VERIFY: ezb_zha_thermostat_config_t / EZB_ZHA_THERMOSTAT_CONFIG()
+     * / ezb_zha_create_thermostat(), and the EZB_ZCL_CLUSTER_ID_THERMOSTAT /
+     * EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID constants below, are
+     * extrapolated from this file's existing ezb_zha_temperature_sensor_ /
+     * ezb_zha_mains_power_outlet_ naming pattern, plus the real (esp_zb_*)
+     * SDK's documented esp_zb_thermostat_cfg_t.thermostat_cfg.occupied_heating_setpoint
+     * field - not confirmed against the vendored ezbee headers. Fix the names
+     * up against the real headers on first build if they don't match. */
+    ezb_zha_thermostat_config_t setpoint_cfg = EZB_ZHA_THERMOSTAT_CONFIG();
+    setpoint_cfg.thermostat_cfg.occupied_heating_setpoint = APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES;
+    ezb_af_ep_desc_t setpoint_ep = ezb_zha_create_thermostat(APP_EP_POOL_SETPOINT, &setpoint_cfg);
+    zb_set_basic_cluster_strings(setpoint_ep);
+    ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(dev_desc, setpoint_ep), TAG, "Failed to add pool setpoint endpoint");
+
     ESP_RETURN_ON_ERROR(ezb_af_device_desc_register(dev_desc), TAG, "Failed to register device descriptor");
+
+    uint8_t auto_enable_default_on = 1;
+    ezb_zcl_set_attr_value(APP_EP_AUTO_ENABLE, EZB_ZCL_CLUSTER_ID_ON_OFF, EZB_ZCL_CLUSTER_SERVER,
+                           EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, EZB_ZCL_STD_MANUF_CODE, &auto_enable_default_on, false);
 
     ezb_zcl_core_action_handler_register(zb_zcl_core_action_handler);
 
@@ -434,4 +510,14 @@ bool zb_main_is_manual_override_active(void)
         ESP_LOGI(TAG, "Manual override window elapsed; resuming automatic pump control");
     }
     return s_manual_override_active;
+}
+
+bool zb_main_is_auto_control_enabled(void)
+{
+    return s_auto_control_enabled;
+}
+
+int16_t zb_main_get_pool_setpoint_centidegrees(void)
+{
+    return s_pool_setpoint_centidegrees;
 }
