@@ -14,8 +14,8 @@ static const char *TAG = "PUMP_CTRL";
 
 static ads1115_handle_t s_adc;
 
-/* TODO (together): replace with the datasheet B-coefficient/R25 for your
- * actual thermistors and the real divider resistor/PGA range you wire up. */
+/* Generic 10k NTC (B=3950), each with a 10k fixed resistor from 3.3V to the
+ * ADS1115 input (NTC to GND) - see thermistor.c for the divider topology. */
 static const thermistor_params_t s_therm_params = {
     .b_coefficient = 3950.0f,
     .r25_ohms = 10000.0f,
