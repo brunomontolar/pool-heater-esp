@@ -18,7 +18,9 @@ extern "C" {
 #define APP_I2C_FREQ_HZ    400000
 
 #define APP_ADS1115_I2C_ADDR 0x48 /* ADDR pin tied to GND */
-#define APP_ADS1115_CH_THERM1 0  /* AIN0 */
+#define APP_ADS1115_CH_THERM1 3  /* AIN3 - moved during bring-up while chasing what turned out to be
+                                  * a polling-delay bug (see ads1115.c), not a bad AIN0 pin. Fine to
+                                  * move back to channel 0 (AIN0) if that's more convenient wiring. */
 #define APP_ADS1115_CH_THERM2 1  /* AIN1 */
 
 /* ---------------------------------------------------------------------- */

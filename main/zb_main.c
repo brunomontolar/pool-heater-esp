@@ -95,12 +95,6 @@ static volatile int64_t s_manual_override_deadline_us = 0;
 static volatile bool    s_auto_control_enabled = true;
 static volatile int16_t s_pool_setpoint_centidegrees = APP_DEFAULT_POOL_SETPOINT_CENTIDEGREES;
 
-/* Set right before we ask the stack to factory-reset itself, so the
- * EZB_ZDO_SIGNAL_LEAVE handler below knows this particular leave is ours and
- * should be followed by a reboot, rather than e.g. the coordinator kicking us
- * off the network for an unrelated reason. */
-static volatile bool s_factory_reset_requested = false;
-
 /* ---------------------------------------------------------------------- */
 /* NVS persistence for s_auto_control_enabled / s_pool_setpoint_centidegrees */
 /* ---------------------------------------------------------------------- */
@@ -356,10 +350,6 @@ static bool zb_app_signal_handler(const ezb_app_signal_t *app_signal)
     case EZB_ZDO_SIGNAL_LEAVE: {
         const ezb_zdo_signal_leave_params_t *leave_params = ezb_app_signal_get_params(app_signal);
         ESP_LOGI(TAG, "Left network with type(0x%02x)", leave_params->leave_type);
-        if (s_factory_reset_requested) {
-            ESP_LOGW(TAG, "Factory reset complete, restarting to rejoin as factory-new");
-            esp_restart();
-        }
     } break;
     case EZB_NWK_SIGNAL_PERMIT_JOIN_STATUS: {
         uint8_t duration = *(uint8_t *)ezb_app_signal_get_params(app_signal);
@@ -428,17 +418,24 @@ static esp_err_t zb_create_device(void)
      * about the cluster (LocalTemperature, SystemMode, etc.) is left at the
      * config macro's defaults - unused by this device.
      *
-     * ASSUMPTION TO VERIFY: ezb_zha_thermostat_config_t / EZB_ZHA_THERMOSTAT_CONFIG()
-     * / ezb_zha_create_thermostat(), and the EZB_ZCL_CLUSTER_ID_THERMOSTAT /
-     * EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID constants below, are
-     * extrapolated from this file's existing ezb_zha_temperature_sensor_ /
-     * ezb_zha_mains_power_outlet_ naming pattern, plus the real (esp_zb_*)
-     * SDK's documented esp_zb_thermostat_cfg_t.thermostat_cfg.occupied_heating_setpoint
-     * field - not confirmed against the vendored ezbee headers. Fix the names
-     * up against the real headers on first build if they don't match. */
+     * OccupiedHeatingSetpoint is an optional attribute, so - unlike the
+     * mandatory LocalTemperature/ControlSequenceOfOperation/SystemMode fields
+     * in ezb_zha_thermostat_config_t.thermostat_cfg - it isn't part of the
+     * create-time config struct at all; it has to be added to the cluster
+     * descriptor after creation, the same way zb_set_basic_cluster_strings()
+     * adds the (also optional) manufacturer/model strings to the Basic
+     * cluster below. */
     ezb_zha_thermostat_config_t setpoint_cfg = EZB_ZHA_THERMOSTAT_CONFIG();
-    setpoint_cfg.thermostat_cfg.occupied_heating_setpoint = s_pool_setpoint_centidegrees;
     ezb_af_ep_desc_t setpoint_ep = ezb_zha_create_thermostat(APP_EP_POOL_SETPOINT, &setpoint_cfg);
+    ezb_zcl_cluster_desc_t thermostat_desc =
+        ezb_af_endpoint_get_cluster_desc(setpoint_ep, EZB_ZCL_CLUSTER_ID_THERMOSTAT, EZB_ZCL_CLUSTER_SERVER);
+    /* add_attr copies this into the cluster's own attribute storage, so a
+     * transient non-volatile local is fine here (and required - s_pool_..._'s
+     * volatile qualifier can't implicitly convert to the plain `const void *`
+     * parameter). */
+    int16_t initial_setpoint_centidegrees = s_pool_setpoint_centidegrees;
+    ezb_zcl_thermostat_cluster_desc_add_attr(thermostat_desc, EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID,
+                                             &initial_setpoint_centidegrees);
     zb_set_basic_cluster_strings(setpoint_ep);
     ESP_RETURN_ON_ERROR(ezb_af_device_add_endpoint_desc(dev_desc, setpoint_ep), TAG, "Failed to add pool setpoint endpoint");
 
@@ -481,11 +478,6 @@ static void zb_main_task(void *pvParameters)
 /* Boot-button factory reset                                              */
 /* ---------------------------------------------------------------------- */
 
-/* ASSUMPTION TO VERIFY: ezb_factory_reset() is this SDK line's analogue of
- * the classic esp_zb_factory_reset() (leave the network and erase Zigbee
- * NVRAM, then emit EZB_ZDO_SIGNAL_LEAVE with a reset leave type) - confirm
- * the name against the actual ezbee headers once they're available; adjust
- * if the SDK instead expects e.g. ezb_bdb_reset_via_local_action(). */
 static void zb_boot_button_task(void *pvParameters)
 {
     const TickType_t poll_interval = pdMS_TO_TICKS(50);
@@ -505,10 +497,11 @@ static void zb_boot_button_task(void *pvParameters)
                        (esp_timer_get_time() - press_start_us) >= (int64_t)APP_FACTORY_RESET_HOLD_MS * 1000) {
                 reset_armed = false;
                 ESP_LOGW(TAG, "BOOT button held %dms - factory resetting Zigbee stack", APP_FACTORY_RESET_HOLD_MS);
-                s_factory_reset_requested = true;
+                /* esp_zigbee_factory_reset() is documented __attribute__((noreturn)) -
+                 * it clears the Zigbee datasets and restarts the device itself, so
+                 * there's no lock_release()/further code after it to run. */
                 esp_zigbee_lock_acquire(portMAX_DELAY);
-                ezb_factory_reset();
-                esp_zigbee_lock_release();
+                esp_zigbee_factory_reset();
             }
         }
 
