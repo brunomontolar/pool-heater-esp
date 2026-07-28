@@ -101,6 +101,18 @@ extern "C" {
 #define APP_REPORT_MAX_INTERVAL_S 300  /* send a report at least this often, even if unchanged */
 #define APP_REPORT_DELTA_CENTIDEGREES 20 /* 0.20C - report early if it changes by at least this much */
 
+/* Zigbee attribute reporting for the On/Off cluster (pump relay ep 12,
+ * auto-control switch ep 13). No reportable-change field - On/Off is a
+ * discrete attribute type. */
+#define APP_ONOFF_REPORT_MIN_INTERVAL_S 0    /* report immediately on every change */
+#define APP_ONOFF_REPORT_MAX_INTERVAL_S 3600 /* periodic heartbeat even if unchanged */
+
+/* Zigbee attribute reporting for the pool heating setpoint (Thermostat
+ * cluster's OccupiedHeatingSetpoint, endpoint 14). */
+#define APP_SETPOINT_REPORT_MIN_INTERVAL_S 1
+#define APP_SETPOINT_REPORT_MAX_INTERVAL_S 3600
+#define APP_SETPOINT_REPORT_DELTA_CENTIDEGREES 10 /* 0.10C */
+
 #ifdef __cplusplus
 }
 #endif
