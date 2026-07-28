@@ -38,8 +38,9 @@ Pin assignments and I2C address live in [`main/app_config.h`](main/app_config.h)
 | 14       | Thermostat (0x0201)              | Pool heating setpoint, `OccupiedHeatingSetpoint`   |
 
 The device is a single Zigbee node exposing all five endpoints, joins as a **Router**
-(mains-powered), and configures its own attribute reporting for endpoints 10/11 so
-Zigbee2MQTT gets pushed temperature updates instead of polling.
+(mains-powered), and configures its own attribute reporting for all five endpoints so
+Zigbee2MQTT gets pushed updates (temperatures, pump/auto-control state, setpoint) instead of
+polling - see `zb_configure_all_reporting()` in `main/zb_main.c`.
 
 Manual on/off writes from Home Assistant/Z2M to endpoint 12 are respected and suppress
 automatic pump control for `APP_MANUAL_OVERRIDE_TIMEOUT_MS` (see `app_config.h`) before the
@@ -134,12 +135,18 @@ It maps the five endpoints above to named entities instead of generic `l1`..`l5`
 | `auto_control`| 13 | `state_auto_control`                           |
 | `setpoint`    | 14 | `occupied_heating_setpoint`                    |
 
-Its `configure()` step binds and configures reporting on all five endpoints so Z2M gets pushed
-updates (not just polling) when the pump relay or auto-control switch changes state on its own
-(e.g. the hysteresis loop turning the pump on/off) rather than only in response to a write from
-Z2M/Home Assistant. The firmware only pre-allocates a reporting slot for the two temperature
-endpoints at commissioning time (`zb_configure_all_reporting()` in `main/zb_main.c`) - if the
-`configure` step logs a warning for endpoints 12-14, those attributes still work for
-reads/writes, they just may need `main/zb_main.c` extended to allocate reporting slots for them
-too (e.g. via `ezb_zcl_reporting_info_find`/`_update` at the On/Off and Thermostat endpoints, the
-same way it's done for Temperature Measurement) to get proactive push updates.
+Its `configure()` step binds all five endpoints and negotiates reporting over the air, on top of
+the reporting the firmware already configures for itself at boot
+(`zb_configure_all_reporting()` in `main/zb_main.c`, covers all five endpoints as of this
+revision) - so Z2M gets pushed updates when the pump relay or auto-control switch changes state
+on its own (e.g. the hysteresis loop turning the pump on/off, or the manual-override timeout
+elapsing), not just in response to a write from Z2M/Home Assistant.
+
+Whether the On/Off (ep 12/13) and Thermostat (ep 14) reporting slots are actually available
+depends on the ZHA device-type macros pre-allocating them the same way they do for Temperature
+Measurement - unconfirmed for `OccupiedHeatingSetpoint` specifically, since it's added to the
+Thermostat cluster descriptor after creation as an optional attribute (see `zb_create_device` in
+`main/zb_main.c`). If a reporting slot is missing, `zb_configure_reporting()` just logs a
+`No reporting slot found for endpoint ... ` warning at boot and that attribute falls back to
+read/write-only (no push reports, still fully controllable) - check the boot log after
+flashing.

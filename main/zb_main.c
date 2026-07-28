@@ -196,34 +196,84 @@ static void zb_schedule_commissioning_retry(ezb_bdb_comm_mode_mask_t mode, uint3
 }
 
 /* ---------------------------------------------------------------------- */
-/* Attribute reporting configuration (Temperature Measurement, ep 10/11)   */
+/* Attribute reporting configuration (Temperature Measurement ep 10/11,    */
+/* On/Off ep 12/13, Thermostat OccupiedHeatingSetpoint ep 14)              */
 /* ---------------------------------------------------------------------- */
 
-static void zb_configure_temperature_reporting(uint8_t endpoint_id)
+/* Shared by the per-cluster helpers below. `delta` is the ZCL "reportable
+ * change" field - meaningful only for analog attribute types (temperature,
+ * setpoint); callers configuring a discrete attribute (On/Off) pass a
+ * zero-initialized variable since it doesn't apply there.
+ *
+ * ASSUMPTION TO VERIFY: this assumes every endpoint/cluster/attribute passed
+ * in has a reporting slot pre-allocated by the ZHA config macros in
+ * zb_create_device() - true for Temperature Measurement's MeasuredValue
+ * (confirmed working), unconfirmed for On/Off's OnOff attribute and
+ * especially for Thermostat's OccupiedHeatingSetpoint (added to the cluster
+ * descriptor after creation as an optional attribute, see zb_create_device).
+ * If unallocated, ezb_zcl_reporting_info_find() below just logs a warning at
+ * boot and that attribute falls back to read/write-only (no push reports) -
+ * check the boot log after flashing. */
+static void zb_configure_reporting(uint8_t endpoint_id, uint16_t cluster_id, uint16_t attr_id,
+                                    uint16_t min_interval_s, uint16_t max_interval_s,
+                                    const ezb_zcl_attr_variable_t *delta, const char *label)
 {
     ezb_zcl_reporting_info_t info = ezb_zcl_reporting_info_find(
-        endpoint_id, EZB_ZCL_CLUSTER_ID_TEMPERATURE_MEASUREMENT, EZB_ZCL_CLUSTER_SERVER,
-        EZB_ZCL_ATTR_TEMPERATURE_MEASUREMENT_MEASURED_VALUE_ID, EZB_ZCL_STD_MANUF_CODE);
+        endpoint_id, cluster_id, EZB_ZCL_CLUSTER_SERVER, attr_id, EZB_ZCL_STD_MANUF_CODE);
     if (info == EZB_ZCL_INVALID_REPORTING_INFO) {
-        ESP_LOGW(TAG, "No reporting slot found for endpoint %d MeasuredValue", endpoint_id);
+        ESP_LOGW(TAG, "No reporting slot found for endpoint %d %s", endpoint_id, label);
         return;
     }
 
-    ezb_zcl_attr_variable_t delta = { .s16 = APP_REPORT_DELTA_CENTIDEGREES };
-    ezb_err_t err = ezb_zcl_reporting_info_update(info, APP_REPORT_MIN_INTERVAL_S, APP_REPORT_MAX_INTERVAL_S, &delta);
+    ezb_err_t err = ezb_zcl_reporting_info_update(info, min_interval_s, max_interval_s, delta);
     if (err != EZB_ERR_NONE) {
-        ESP_LOGW(TAG, "Failed to configure reporting for endpoint %d (0x%04x)", endpoint_id, err);
+        ESP_LOGW(TAG, "Failed to configure reporting for endpoint %d %s (0x%04x)", endpoint_id, label, err);
         return;
     }
     ezb_zcl_reporting_start_attr_report(info);
-    ESP_LOGI(TAG, "Configured reporting for endpoint %d: min=%ds max=%ds delta=%d centidegrees", endpoint_id,
-             APP_REPORT_MIN_INTERVAL_S, APP_REPORT_MAX_INTERVAL_S, APP_REPORT_DELTA_CENTIDEGREES);
+    ESP_LOGI(TAG, "Configured reporting for endpoint %d %s: min=%ds max=%ds", endpoint_id, label,
+             min_interval_s, max_interval_s);
+}
+
+static void zb_configure_temperature_reporting(uint8_t endpoint_id)
+{
+    ezb_zcl_attr_variable_t delta = { .s16 = APP_REPORT_DELTA_CENTIDEGREES };
+    zb_configure_reporting(endpoint_id, EZB_ZCL_CLUSTER_ID_TEMPERATURE_MEASUREMENT,
+                            EZB_ZCL_ATTR_TEMPERATURE_MEASUREMENT_MEASURED_VALUE_ID,
+                            APP_REPORT_MIN_INTERVAL_S, APP_REPORT_MAX_INTERVAL_S, &delta, "MeasuredValue");
+}
+
+/* Reports the pump relay (ep 12) and auto-control switch (ep 13) On/Off
+ * state whenever it changes on its own - e.g. the hysteresis loop driving
+ * the relay, or the manual-override timeout elapsing - not just when
+ * written to over the network. Min interval 0 = report immediately on
+ * change, no throttling. */
+static void zb_configure_on_off_reporting(uint8_t endpoint_id)
+{
+    ezb_zcl_attr_variable_t delta = { 0 };
+    zb_configure_reporting(endpoint_id, EZB_ZCL_CLUSTER_ID_ON_OFF, EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
+                            APP_ONOFF_REPORT_MIN_INTERVAL_S, APP_ONOFF_REPORT_MAX_INTERVAL_S, &delta, "OnOff");
+}
+
+/* Reports the pool heating setpoint (ep 14) so Z2M/Home Assistant see a
+ * setpoint change made e.g. via a factory-reset-surviving NVS reload at
+ * boot, not just changes it wrote itself. */
+static void zb_configure_setpoint_reporting(uint8_t endpoint_id)
+{
+    ezb_zcl_attr_variable_t delta = { .s16 = APP_SETPOINT_REPORT_DELTA_CENTIDEGREES };
+    zb_configure_reporting(endpoint_id, EZB_ZCL_CLUSTER_ID_THERMOSTAT,
+                            EZB_ZCL_ATTR_THERMOSTAT_OCCUPIED_HEATING_SETPOINT_ID,
+                            APP_SETPOINT_REPORT_MIN_INTERVAL_S, APP_SETPOINT_REPORT_MAX_INTERVAL_S, &delta,
+                            "OccupiedHeatingSetpoint");
 }
 
 static void zb_configure_all_reporting(void)
 {
     zb_configure_temperature_reporting(APP_EP_THERMISTOR_1);
     zb_configure_temperature_reporting(APP_EP_THERMISTOR_2);
+    zb_configure_on_off_reporting(APP_EP_PUMP_RELAY);
+    zb_configure_on_off_reporting(APP_EP_AUTO_ENABLE);
+    zb_configure_setpoint_reporting(APP_EP_POOL_SETPOINT);
 }
 
 /* ---------------------------------------------------------------------- */
