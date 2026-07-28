@@ -32,7 +32,12 @@ const definition = {
     model: 'TempPump',
     vendor: 'PoolCtrl',
     description: 'Solar pool heater pump controller (collector/pool thermistors, pump relay, auto-control switch, heating setpoint)',
-    fromZigbee: [fz.temperature, fz.on_off, fz.thermostat_occupied_heating_setpoint],
+    /* fz.thermostat (not a nonexistent fz.thermostat_occupied_heating_setpoint) is
+     * the real, generic hvacThermostat fromZigbee converter - it maps the
+     * cluster's occupiedHeatingSetpoint field to the `occupied_heating_setpoint`
+     * property (endpoint-postfixed same as the expose below), among other
+     * thermostat attributes we don't use here. */
+    fromZigbee: [fz.temperature, fz.on_off, fz.thermostat],
     toZigbee: [tz.on_off, tz.thermostat_occupied_heating_setpoint],
     exposes: [
         e.temperature().withEndpoint('collector').withDescription('Solar collector temperature'),
