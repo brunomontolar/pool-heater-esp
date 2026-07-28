@@ -325,11 +325,18 @@ static bool zb_app_signal_handler(const ezb_app_signal_t *app_signal)
              * (re)configured every boot too - not just on first commissioning. */
             zb_configure_all_reporting();
             ESP_LOGI(TAG, "Device started up in%s factory-reset mode", ezb_bdb_is_factory_new() ? "" : " non");
-            if (ezb_bdb_is_factory_new()) {
-                ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
-            } else {
-                ESP_LOGI(TAG, "Device reboot, already joined - rejoining automatically");
-            }
+            /* Always (re-)trigger steering, not just when factory-new: per the
+             * BDB spec, Network Steering performs a fresh join for a
+             * factory-new device but a *rejoin* for one that already has
+             * network data - it's the mechanism for both cases, not just the
+             * first one. Passively assuming the stack silently reconnects on
+             * its own after a plain reboot leaves us with zero visibility
+             * into whether that actually happens, and no fallback if the
+             * coordinator no longer recognizes this device (e.g. after it
+             * dropped the child/route entry during earlier interrupted
+             * joins) - explicitly kicking steering here gets us a real
+             * EZB_BDB_SIGNAL_STEERING success/failure signal either way. */
+            ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
         } else {
             ESP_LOGW(TAG, "%s failed with status(0x%02x), retrying", ezb_app_signal_to_string(signal_type), status);
             zb_schedule_commissioning_retry(EZB_BDB_MODE_INITIALIZATION, 1000);
@@ -342,6 +349,9 @@ static bool zb_app_signal_handler(const ezb_app_signal_t *app_signal)
             ezb_nwk_get_extended_panid(&extended_pan_id);
             ESP_LOGI(TAG, "Joined network successfully: PAN ID(0x%04hx, EXT: 0x%llx), Channel(%d), Short Address(0x%04hx)",
                      ezb_nwk_get_panid(), extended_pan_id.u64, ezb_nwk_get_current_channel(), ezb_nwk_get_short_address());
+            int8_t tx_power = 0;
+            ezb_get_tx_power(&tx_power);
+            ESP_LOGI(TAG, "Radio TX power: %d dBm", tx_power);
         } else {
             ESP_LOGW(TAG, "Failed to join network with status(0x%02x), retrying", status);
             zb_schedule_commissioning_retry(EZB_BDB_MODE_NETWORK_STEERING, 1000);
