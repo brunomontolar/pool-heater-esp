@@ -115,3 +115,31 @@ pairing mode (`permit_join`) before or during the hold so it rejoins right away.
 
 Network credentials persist across normal reboots (they live in the `zb_storage` NVS partition),
 so a power cycle alone does not require re-pairing.
+
+## Zigbee2MQTT external converter
+
+Without a converter, Z2M shows this device as `Unsupported`. Install
+[`zigbee2mqtt/poolctrl_temppump.js`](zigbee2mqtt/poolctrl_temppump.js): copy it into Z2M's
+`external_converters` directory (or point `external_converters: [poolctrl_temppump.js]` at it in
+`configuration.yaml`), then restart Zigbee2MQTT. Requires Z2M >= 1.35 (ESM-style external
+converters).
+
+It maps the five endpoints above to named entities instead of generic `l1`..`l5` endpoints:
+
+| Endpoint name | EP | Exposed as                                    |
+|---------------|----|------------------------------------------------|
+| `collector`   | 10 | `temperature_collector`                        |
+| `pool`        | 11 | `temperature_pool`                             |
+| `pump`        | 12 | `state_pump`                                   |
+| `auto_control`| 13 | `state_auto_control`                           |
+| `setpoint`    | 14 | `occupied_heating_setpoint`                    |
+
+Its `configure()` step binds and configures reporting on all five endpoints so Z2M gets pushed
+updates (not just polling) when the pump relay or auto-control switch changes state on its own
+(e.g. the hysteresis loop turning the pump on/off) rather than only in response to a write from
+Z2M/Home Assistant. The firmware only pre-allocates a reporting slot for the two temperature
+endpoints at commissioning time (`zb_configure_all_reporting()` in `main/zb_main.c`) - if the
+`configure` step logs a warning for endpoints 12-14, those attributes still work for
+reads/writes, they just may need `main/zb_main.c` extended to allocate reporting slots for them
+too (e.g. via `ezb_zcl_reporting_info_find`/`_update` at the On/Off and Thermostat endpoints, the
+same way it's done for Temperature Measurement) to get proactive push updates.
