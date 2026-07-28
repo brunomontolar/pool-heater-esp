@@ -14,10 +14,19 @@ static const char *TAG = "ADS1115";
  * PGA range that never clips (see app_config.h / thermistor.c). */
 #define ADS1115_PGA_RANGE ADS1115_CFG_PGA_4_096V
 
-/* 128SPS single-shot conversions complete in ~8ms; poll a bit past that
- * before giving up. */
-#define ADS1115_CONVERSION_POLL_DELAY_MS 2
-#define ADS1115_CONVERSION_POLL_ATTEMPTS 10
+/* 128SPS single-shot conversions complete in ~8ms; poll well past that
+ * before giving up (generous margin - a slow/marginal I2C link shouldn't
+ * make this the reason a read fails).
+ *
+ * Must be a whole multiple of the FreeRTOS tick period (10ms at this
+ * project's CONFIG_FREERTOS_HZ=100) - pdMS_TO_TICKS() truncates via integer
+ * division, so e.g. pdMS_TO_TICKS(3) silently rounds down to 0 ticks and
+ * vTaskDelay(0) is just a bare yield with no guaranteed real wait. That was
+ * the actual bug behind this poll intermittently timing out: it wasn't
+ * really waiting between polls at all, just burning through I2C
+ * transactions as fast as the scheduler allowed. */
+#define ADS1115_CONVERSION_POLL_DELAY_MS 10
+#define ADS1115_CONVERSION_POLL_ATTEMPTS 8
 
 struct ads1115_dev_s {
     i2c_master_dev_handle_t i2c_dev;
