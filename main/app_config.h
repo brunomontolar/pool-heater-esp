@@ -31,15 +31,41 @@ extern "C" {
 #define APP_RELAY_ACTIVE_HIGH 1           /* set to 0 if your relay board is active-low */
 
 /* ---------------------------------------------------------------------- */
-/* Boot button (Zigbee factory reset)                                     */
+/* Boot button (pairing / factory reset) + onboard LED (pairing indicator) */
 /* ---------------------------------------------------------------------- */
 
-/* Stock BOOT button on ESP32-C6-DevKitC-1 - active-low, external button ties
- * it to GND, internal pull-up holds it high when released. Also a strapping
- * pin at power-on/reset, but that only matters before/during boot; safe to
- * reconfigure as a plain input once the app is running. */
-#define APP_BOOT_BUTTON_GPIO      GPIO_NUM_9
-#define APP_FACTORY_RESET_HOLD_MS (5000) /* hold BOOT this long to leave the network and re-pair */
+/* Stock BOOT button on the Seeed XIAO ESP32C6 - active-low, external button
+ * ties it to GND, internal pull-up holds it high when released. Also a
+ * strapping pin at power-on/reset, but that only matters before/during
+ * boot; safe to reconfigure as a plain input once the app is running.
+ *
+ * Same 5s hold gesture, different effect depending on current state - this
+ * matches how most commercial Zigbee end devices behave, rather than always
+ * auto-joining on every boot:
+ *   - Not yet paired (factory-new, including right after a factory reset):
+ *     starts a pairing window (APP_PAIRING_WINDOW_MS) - the device does NOT
+ *     attempt to join on its own otherwise.
+ *   - Already paired: leaves the network and erases Zigbee credentials
+ *     (factory reset, unchanged from before). A *second* 5s hold afterwards
+ *     is needed to actually start a new pairing window, since the device is
+ *     now factory-new and - per the rule above - won't auto-join. */
+#define APP_BOOT_BUTTON_GPIO GPIO_NUM_9
+#define APP_BUTTON_HOLD_MS   (5000)
+
+/* How long a pairing window (button-triggered join attempt) stays open
+ * before giving up if no coordinator accepts the join - the device goes
+ * back to idle and needs another 5s hold to retry. Does not apply to the
+ * automatic background reconnect attempted when the device reboots already
+ * paired - that retries indefinitely, matching typical mains-powered Zigbee
+ * router behavior (see zb_main.c's EZB_BDB_SIGNAL_STEERING handler). */
+#define APP_PAIRING_WINDOW_MS (2 * 60 * 1000)
+
+/* Onboard user LED on the Seeed XIAO ESP32C6 - GPIO15, active-low (drive low
+ * to turn on). Blinks while a pairing window (above) is open; off otherwise.
+ * https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/ */
+#define APP_LED_GPIO              GPIO_NUM_15
+#define APP_LED_ACTIVE_HIGH       0
+#define APP_LED_BLINK_INTERVAL_MS 300 /* toggle period while pairing (~1.7Hz) */
 
 /* ---------------------------------------------------------------------- */
 /* Zigbee endpoints (HA profile)                                          */
