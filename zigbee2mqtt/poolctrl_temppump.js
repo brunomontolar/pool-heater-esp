@@ -9,13 +9,26 @@
  *
  * Install: copy this file into Z2M's `external_converters` directory (or
  * point `external_converters: [poolctrl_temppump.js]` at it in
- * configuration.yaml) and restart Zigbee2MQTT. Requires Zigbee2MQTT >= 1.35
- * (ESM-style external converters).
+ * configuration.yaml) and restart Zigbee2MQTT.
+ *
+ * CommonJS require(), not ESM import: an earlier version of this file used
+ * `import ... from 'zigbee-herdsman-converters/lib/fromZigbee'`, which failed
+ * with "Cannot find module .../external_converters/node_modules/zigbee-herdsman-converters/dist/lib/fromZigbee.js".
+ * Two separate problems, both fixed below:
+ *   1. fromZigbee/toZigbee actually live under the package's `converters/`
+ *      subpath, not `lib/` (only exposes/reporting/tuya/modernExtend are
+ *      under `lib/` - confirmed against the zigbee-herdsman-converters
+ *      source tree, which has no package.json "exports" map restricting
+ *      subpaths, so it resolves by real file path).
+ *   2. require()/module.exports matches how this Z2M install's other
+ *      external converters are written and known to resolve correctly;
+ *      ESM import resolution behaved differently here (e.g. Home Assistant
+ *      add-on container layouts commonly hit this).
  */
-import * as exposes from 'zigbee-herdsman-converters/lib/exposes';
-import * as fz from 'zigbee-herdsman-converters/lib/fromZigbee';
-import * as tz from 'zigbee-herdsman-converters/lib/toZigbee';
-import * as reporting from 'zigbee-herdsman-converters/lib/reporting';
+const fz = require('zigbee-herdsman-converters/converters/fromZigbee');
+const tz = require('zigbee-herdsman-converters/converters/toZigbee');
+const exposes = require('zigbee-herdsman-converters/lib/exposes');
+const reporting = require('zigbee-herdsman-converters/lib/reporting');
 
 const e = exposes.presets;
 const ea = exposes.access;
@@ -80,4 +93,4 @@ const definition = {
     },
 };
 
-export default definition;
+module.exports = [definition];
