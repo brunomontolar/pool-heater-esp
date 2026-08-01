@@ -72,7 +72,7 @@ extern "C" {
 
 /* Hysteresis thresholds on (temp1 - temp2), in centidegrees C.
  * THRESHOLD_ON must be > THRESHOLD_OFF or the relay will chatter. */
-#define APP_DELTA_THRESHOLD_ON_CENTIDEGREES  500 /* 5.00C */
+#define APP_DELTA_THRESHOLD_ON_CENTIDEGREES  300 /* 3.00C */
 #define APP_DELTA_THRESHOLD_OFF_CENTIDEGREES 200 /* 2.00C */
 
 /* How long a manual on/off write from Home Assistant/Z2M suppresses automatic
@@ -96,21 +96,33 @@ extern "C" {
 #define APP_NVS_KEY_AUTO_ENABLE "auto_en"
 #define APP_NVS_KEY_SETPOINT    "setpoint"
 
+/* Guaranteed heartbeat ceiling shared by all five endpoints' reporting: even
+ * with nothing changed, each pushes an update at least this often. Kept as
+ * one shared constant so the "is it still alive" cadence is the same across
+ * every endpoint rather than a confusing mix of intervals. */
+#define APP_HEARTBEAT_MAX_INTERVAL_S 90
+
 /* Zigbee attribute reporting (Temperature Measurement, endpoints 10 & 11). */
-#define APP_REPORT_MIN_INTERVAL_S 5    /* do not report more often than this */
-#define APP_REPORT_MAX_INTERVAL_S 300  /* send a report at least this often, even if unchanged */
+#define APP_REPORT_MIN_INTERVAL_S 5 /* do not report more often than this */
+#define APP_REPORT_MAX_INTERVAL_S APP_HEARTBEAT_MAX_INTERVAL_S
 #define APP_REPORT_DELTA_CENTIDEGREES 20 /* 0.20C - report early if it changes by at least this much */
 
 /* Zigbee attribute reporting for the On/Off cluster (pump relay ep 12,
  * auto-control switch ep 13). No reportable-change field - On/Off is a
  * discrete attribute type. */
-#define APP_ONOFF_REPORT_MIN_INTERVAL_S 0    /* report immediately on every change */
-#define APP_ONOFF_REPORT_MAX_INTERVAL_S 3600 /* periodic heartbeat even if unchanged */
+#define APP_ONOFF_REPORT_MIN_INTERVAL_S 0 /* report immediately on every change */
+#define APP_ONOFF_REPORT_MAX_INTERVAL_S APP_HEARTBEAT_MAX_INTERVAL_S
 
 /* Zigbee attribute reporting for the pool heating setpoint (Thermostat
- * cluster's OccupiedHeatingSetpoint, endpoint 14). */
+ * cluster's OccupiedHeatingSetpoint, endpoint 14). Kept for documentation/
+ * in case a future SDK version allocates a native reporting slot for it -
+ * as of this SDK version it doesn't, and there's no working fallback either
+ * (ezb_zcl_report_attr_cmd_req() was tried and confirmed tied to the same
+ * unallocated slot - see the comment above zb_on_off_attr_change_handler in
+ * zb_main.c for the full story). Endpoint 14 stays fully readable/writable,
+ * just without a proactive heartbeat like the other four endpoints get. */
 #define APP_SETPOINT_REPORT_MIN_INTERVAL_S 1
-#define APP_SETPOINT_REPORT_MAX_INTERVAL_S 3600
+#define APP_SETPOINT_REPORT_MAX_INTERVAL_S APP_HEARTBEAT_MAX_INTERVAL_S
 #define APP_SETPOINT_REPORT_DELTA_CENTIDEGREES 10 /* 0.10C */
 
 #ifdef __cplusplus
