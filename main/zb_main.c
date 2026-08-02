@@ -77,13 +77,16 @@ static const char *TAG = "ZB_MAIN";
 /* Guards the SET_ATTR_VALUE callback below from mistaking our own
  * automatic-control writes for a manual override from the network.
  *
- * ASSUMPTION TO VERIFY: this assumes ezb_zcl_set_attr_value() invokes the
- * EZB_ZCL_CORE_SET_ATTR_VALUE_CB_ID callback synchronously, in the same call
- * stack, before returning - so setting this flag immediately before the call
- * and clearing it immediately after is sufficient. Confirm this holds (e.g.
- * by logging timestamps) before relying on it; if the callback is ever
- * dispatched asynchronously instead, this flag needs to become a queue/tag
- * keyed on the write instead of a simple boolean. */
+ * CONFIRMED ON REAL HARDWARE (this flag turned out not to be the main
+ * concern): EZB_ZCL_CORE_SET_ATTR_VALUE_CB_ID only fires for genuine
+ * incoming ZCL commands from the network, not for the app's own
+ * ezb_zcl_set_attr_value() calls - the attribute value itself updates
+ * either way, but relay_set() (called from that callback) never ran for
+ * automatic control until zb_main_set_pump_state() started calling it
+ * directly too (see there). This flag still guards against the remaining
+ * theoretical case where the callback *does* fire for a local write (e.g.
+ * if that ever changes in a future SDK version), so it's kept as a safety
+ * net rather than removed. */
 static volatile bool s_applying_local_pump_state = false;
 
 static volatile bool    s_manual_override_active = false;
@@ -290,6 +293,28 @@ static void zb_configure_all_reporting(void)
 /* ---------------------------------------------------------------------- */
 /* On/Off cluster write handling (Home Assistant/Z2M -> device)            */
 /* ---------------------------------------------------------------------- */
+
+/* CONFIRMED SDK LIMITATION (not just an unallocated slot - actually tried
+ * and empirically ruled out both ways to work around it): the pool setpoint
+ * (ep 14, Thermostat's OccupiedHeatingSetpoint) cannot be proactively pushed
+ * on this SDK version. ezb_zcl_reporting_info_find() returns nothing for it
+ * (see zb_create_device()'s comment - it's an optional attribute added to
+ * the cluster after creation, and reporting slots are only pre-allocated
+ * for the mandatory attributes the ZHA config macro sets up at creation
+ * time). The natural workaround, ezb_zcl_report_attr_cmd_req() (used by the
+ * SDK's own temperature_sensor.c example to force an immediate report), was
+ * tried and failed with EZB_ERR_NOT_FOUND both addressed via the binding
+ * table (EZB_ADDR_MODE_NONE) and addressed directly at the coordinator
+ * (short address 0x0000) - it turns out to be tied to the same
+ * reporting-info table, not a general-purpose "send this value now"
+ * command, so neither addressing mode helps.
+ *
+ * Net effect: endpoints 10-13 all proactively heartbeat within
+ * APP_HEARTBEAT_MAX_INTERVAL_S; endpoint 14 remains fully readable/writable
+ * (Z2M/Home Assistant already know immediately about changes they make
+ * themselves) but won't proactively notify Z2M of a device-initiated change
+ * (e.g. reloading a persisted value from NVS after a factory reset) until
+ * the next time something reads it. */
 
 static void zb_on_off_attr_change_handler(ezb_zcl_set_attr_value_message_t *message)
 {
@@ -692,6 +717,17 @@ void zb_main_set_pump_state(bool on)
                            EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, EZB_ZCL_STD_MANUF_CODE, &value, false);
     esp_zigbee_lock_release();
     s_applying_local_pump_state = false;
+
+    /* CONFIRMED ON REAL HARDWARE: EZB_ZCL_CORE_SET_ATTR_VALUE_CB_ID (which is
+     * what zb_on_off_attr_change_handler uses to call relay_set()) only
+     * fires for genuine incoming ZCL commands from the network, not for our
+     * own local ezb_zcl_set_attr_value() calls above - the attribute value
+     * itself does update either way (confirmed: Z2M correctly showed "pump
+     * ON" after the automatic control loop decided to turn it on), but
+     * without this direct call the relay itself never physically engaged
+     * for automatic control, only for a genuine remote On/Off write. Drive
+     * it directly here instead of depending on that callback. */
+    relay_set(on);
 }
 
 bool zb_main_is_manual_override_active(void)
