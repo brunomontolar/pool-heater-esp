@@ -100,19 +100,26 @@ main/
 └── pump_control.c/.h   # Control loop: read -> report -> hysteresis -> drive relay
 ```
 
-## Flashing onto a fresh device
+## Pairing, re-pairing, and factory reset
 
-The device joins via Zigbee network steering automatically on first boot (factory-new state).
-Put your Zigbee2MQTT coordinator into pairing mode (`permit_join`) before powering on the
-board for the first time, or after a factory reset.
+Board is a **Seeed Studio XIAO ESP32C6**. The BOOT button (GPIO9, `APP_BOOT_BUTTON_GPIO` in
+[`main/app_config.h`](main/app_config.h)) and onboard user LED (GPIO15, active-low,
+`APP_LED_GPIO`) drive pairing, matching how most commercial Zigbee end devices behave - the
+device does **not** try to join on its own unless told to:
 
-## Resetting / re-pairing
-
-Hold the board's **BOOT** button (GPIO9 on ESP32-C6-DevKitC-1, see `APP_BOOT_BUTTON_GPIO` in
-[`main/app_config.h`](main/app_config.h)) for `APP_FACTORY_RESET_HOLD_MS` (5 seconds by default).
-The device leaves the current Zigbee network, erases its stored network credentials, and reboots
-into factory-new state, immediately starting network steering again - put the coordinator into
-pairing mode (`permit_join`) before or during the hold so it rejoins right away.
+- **Factory-new** (including a fresh device, or right after a factory reset): sits idle, does
+  not attempt to join. Hold **BOOT** for `APP_BUTTON_HOLD_MS` (5s by default) to open a pairing
+  window (`APP_PAIRING_WINDOW_MS`, 2 minutes by default) - the onboard LED blinks while it's
+  open. Put your Zigbee2MQTT coordinator into pairing mode (`permit_join`) before or during the
+  hold. If the window closes without joining, the LED stops and another 5s hold is needed to
+  retry. Pump control keeps running normally throughout, with whatever auto-control/setpoint
+  values are currently loaded (defaults, on a truly fresh device) - it never depends on Zigbee
+  join state.
+- **Already paired**: reconnects automatically in the background on every boot (retried
+  indefinitely, no LED, no time limit - this is the normal "recover after a power outage" path).
+  Holding **BOOT** for 5s here instead leaves the network and erases the stored credentials
+  (factory reset) - the device reboots into the factory-new state above, so a *second* 5s hold
+  is needed afterwards to actually start a new pairing window.
 
 Network credentials persist across normal reboots (they live in the `zb_storage` NVS partition),
 so a power cycle alone does not require re-pairing.
